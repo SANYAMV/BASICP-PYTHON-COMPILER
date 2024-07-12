@@ -2,8 +2,6 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import pickle
-import warnings
-warnings.filterwarnings('ignore')
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
@@ -12,13 +10,18 @@ from skopt import gp_minimize
 from skopt.space import Real, Integer
 from skopt.utils import use_named_args
 import matplotlib.pyplot as plt
+
 # Load the data
 with open('X_copy.pkl', 'rb') as f:
     X_copy = pickle.load(f)
 
 with open('y_copy.pkl', 'rb') as f:
     y_copy = pickle.load(f)
-    
+
+# Load the scaler
+with open('scaler.pkl', 'rb') as f:
+    scaler = pickle.load(f)
+
 global globvar
 globvar = 0
 
@@ -37,7 +40,7 @@ def make_predictions(X_copy, y_copy, ex, scaler):
     ex = scaler.transform(ex)
     
     for i in range(16):
-        X_train, X_test, y_train, y_test = train_test_split(X_copy, y_copy, test_size=0.2, random_state=i)
+        X_train, X_test, y_train, y_test = train_test_split(X_copy.iloc[:69], y_copy.iloc[:69], test_size=0.2, random_state=i)
 
         X_train = X_train.reset_index(drop=True)
         X_test = X_test.reset_index(drop=True)
@@ -110,8 +113,50 @@ def get_user_inputs():
 
     return user_input, Bush_OD_min, Bush_OD_max, clear_min, clear_max, Notches_min, Notches_max, Notch_angle_degree_min, Notch_angle_degree_max, Notch_length_min, Notch_length_max
 
+def save_data(X_copy, y_copy):
+    with open('X_copy.pkl', 'wb') as f:
+        pickle.dump(X_copy, f)
+    with open('y_copy.pkl', 'wb') as f:
+        pickle.dump(y_copy, f)
+    st.write("Data has been saved successfully.")
+
+
+def get_new_data_points():
+    st.subheader("Add New Data Points")
+    new_data = {}
+
+    with st.form(key='new_data_form'):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            new_data['Tons'] = st.number_input("Tons: ", min_value=0.0, step=0.1)
+            new_data['WP'] = st.number_input("Working Pressure (New): ", min_value=0.0, step=0.1)
+            new_data['Rod'] = st.number_input("Rod (New): ", min_value=0.0, step=0.01)
+            new_data['Clearance'] = st.number_input("Clearance (New): ", min_value=0.0, step=0.01)
+            new_data['Notches'] = st.number_input("Notches (New): ", min_value=0, step=1)
+            new_data['Bore'] = st.number_input("Bore (New): ", min_value=0.0, step=0.01)
+            new_data['Stroke'] = st.number_input("Stroke (New): ", min_value=0.0, step=0.01)
+            new_data['Type'] = st.selectbox("Type", options=[0, 1], format_func=lambda x: "CEC" if x == 0 else "HEC")
+            new_data['Bush OD'] = st.number_input("Bush OD (New): ", min_value=0.0, step=0.01)
+            new_data['Bush Length'] = st.number_input("Bush Length (New): ", min_value=0.0, step=0.01)
+        
+        with col2:
+            new_data['Notch Angle degree'] = st.number_input("Notch Angle degree (New): ", min_value=0.0, step=0.001)
+            new_data['Notch length(mm)'] = st.number_input("Notch length(mm) (New): ", min_value=0.0, step=0.01)
+            Working_fine = st.number_input("Bush Working Fine?:(Enter 1 if yes, 0 if no) ", min_value=0, step=1)
+        
+        add_data = st.form_submit_button("Add Data Point")
+
+        if add_data:
+            new_data_point = pd.DataFrame([new_data], columns=['Tons', 'WP', 'Rod', 'Clearance', 'Notches', 'Bore', 'Stroke', 'Type', 'Bush OD', 'Bush Length', 'Notch Angle degree', 'Notch length(mm)'])
+            return new_data_point, Working_fine
+        else:
+            return None, None
+    return None,None
+
+
 # Define search space for optimization
-def optimize_parameters(user_input, Bush_OD_min, Bush_OD_max, clear_min, clear_max, Notches_min, Notches_max, Notch_angle_degree_min, Notch_angle_degree_max, Notch_length_min, Notch_length_max):
+def optimize_parameters(user_input, Bush_OD_min, Bush_OD_max, clear_min, clear_max, Notches_min, Notches_max, Notch_angle_degree_min, Notch_angle_degree_max, Notch_length_min, Notch_length_max, X_copy, y_copy, scaler):
     search_space = [
         Real(Bush_OD_min, Bush_OD_max, name='Bush OD'),
         Real(clear_min, clear_max, name='Clearance'),
@@ -124,7 +169,7 @@ def optimize_parameters(user_input, Bush_OD_min, Bush_OD_max, clear_min, clear_m
     def objective(**params):
         sample = {
             'WP': user_input['WP'],
-            'Bore ': user_input['Bore'],
+            'Bore': user_input['Bore'],
             'Stroke': user_input['Stroke'],
             'Clearance': params['Clearance'],
             'Bush OD': params['Bush OD'],
@@ -145,7 +190,6 @@ def optimize_parameters(user_input, Bush_OD_min, Bush_OD_max, clear_min, clear_m
         return -mean_probability
     
     samples = user_input['samples']
-    scaler = StandardScaler()
     X_copy_scaled = pd.DataFrame(scaler.fit_transform(X_copy), columns=X_copy.columns)
 
     res = gp_minimize(objective, search_space, n_calls=samples, random_state=0)
@@ -153,6 +197,7 @@ def optimize_parameters(user_input, Bush_OD_min, Bush_OD_max, clear_min, clear_m
     # Best result
     st.write("Best parameters found:")
     st.write(res.x)
+    
 
     user_input['Bush OD'] = res.x[0]
     user_input['Clearance'] = res.x[1]
@@ -169,11 +214,35 @@ st.title("Bush Optimization App")
 st.write("Provide the necessary inputs to optimize the bush parameters.")
 
 user_input, Bush_OD_min, Bush_OD_max, clear_min, clear_max, Notches_min, Notches_max, Notch_angle_degree_min, Notch_angle_degree_max, Notch_length_min, Notch_length_max = get_user_inputs()
+
+# Initialize session state for new data point if not already present
+if 'new_data_point' not in st.session_state:
+    st.session_state.new_data_point = None
+
+if 'new_working_fine' not in st.session_state:
+    st.session_state.new_working_fine = None
+
+if st.button("Add new Data points"):
+    st.session_state.new_data_point, st.session_state.new_working_fine = get_new_data_points()
+
+if st.session_state.new_data_point is not None:
+    if st.button("Confirm to add the data point"):
+        # Scale the new data point
+        st.write(st.session_state.new_data_point)
+        cols_to_drop = ['Tons']
+        st.session_state.new_data_point = st.session_state.new_data_point.drop(columns=cols_to_drop, axis=1)
+        st.write(st.session_state.new_data_point)
+        
+        st.session_state.new_data_point = None  # Clear the session state after saving
+    elif st.button("Re-enter the given data-point"):
+        st.session_state.new_data_point, st.session_state.new_working_fine = get_new_data_points()  # Clear the session state to re-enter data
+        
 st.write("*Note: If Bush OD/ID is B and tolerance is +h_B & -l_B and the counter-part has an ID/OD of C and tol is +h_C & -l_C")
 st.write("Then clearance is : absolute(((B-C) + (h_B-l_B) + (h_C-h_B ))/2")
-    
+
 if st.button("Optimize Parameters"):
-    optimized_params = optimize_parameters(user_input, Bush_OD_min, Bush_OD_max, clear_min, clear_max, Notches_min, Notches_max, Notch_angle_degree_min, Notch_angle_degree_max, Notch_length_min, Notch_length_max)
+    # Initialize scaler and fit with combined data
+    scaler = StandardScaler().fit(X_copy)
+    optimized_params = optimize_parameters(user_input, Bush_OD_min, Bush_OD_max, clear_min, clear_max, Notches_min, Notches_max, Notch_angle_degree_min, Notch_angle_degree_max, Notch_length_min, Notch_length_max, X_copy, y_copy, scaler)
     st.write("Optimized Parameters:")
     st.write(optimized_params)
-    
